@@ -77,6 +77,38 @@
     }
     ```
 
+### **S13: LUT / ROM Approximation (查表近似)**
+*   **适用场景**: 复杂的超越函数（`exp`, `log`, `sigmoid`, `sin/cos`）位于内层循环，导致 DSP 消耗过高且 II 无法收敛。
+*   **原理**: 对于精度要求不苛刻的场景，预先计算函数值存入 `static const` 数组（ROM），将复杂数学运算转换为一次内存读取。
+*   **Code Pattern**:
+    ```cpp
+    // Precomputed LUT for sigmoid(x) where x in [-8, 8]
+    static const ap_fixed<16,10> SIGMOID_LUT[1024] = { ... };
+
+    ap_fixed<16,10> fast_sigmoid(ap_fixed<16,10> x) {
+        // Map x to index
+        int idx = (x + 8) * (1024 / 16);
+        if (idx < 0) return 0;
+        if (idx >= 1024) return 1;
+        return SIGMOID_LUT[idx]; // Single cycle read
+    }
+    ```
+
+### **S7: Custom Bitwidth & Fixed Point (自定义位宽与定点化)**
+*   **适用场景**: 资源（BRAM/LUT/DSP）受限，或算法对精度不敏感（如神经网络推理）。
+*   **原理**: 放弃标准 `float` 或 `int`，使用 Xilinx 任意精度数据类型 (`ap_fixed`, `ap_int`)。这能显著减少数据路径位宽，降低 BRAM 使用量，并允许在一个 DSP48 中打包执行多个乘法。
+*   **Code Pattern**:
+    ```cpp
+    #include "ap_fixed.h"
+    // Use 16-bit fixed point: 6 bits integer, 10 bits fractional
+    typedef ap_fixed<16, 6> data_t; 
+    
+    void kernel(data_t* in, data_t* out) {
+        // Operations are now resource-efficient
+        data_t val = in[0] * in[1]; 
+    }
+    ```
+
 ---
 
 ## 二、 访存与带宽优化 (Memory & Bandwidth)
@@ -180,6 +212,40 @@
     int val_true = a * b;
     int val_false = c + d;
     res = cond ? val_true : val_false; // HLS infers a Mux
+    ```
+
+### **S9: Loop Fusion (循环融合)**
+*   **适用场景**: 多个循环顺序处理相同大小的数据，中间产生大量临时 BRAM 占用。
+*   **原理**: 将相邻的 Producer 循环和 Consumer 循环合并，使数据在寄存器中直接传递（Locality），减少 BRAM 读写次数和循环控制开销。
+*   **Code Pattern**:
+    ```cpp
+    // Before: 2 Loops, 1 Temp Buffer
+    for (i=0..N) temp[i] = A[i] * 2;
+    for (i=0..N) C[i] = temp[i] + B[i];
+    
+    // After: 1 Loop, Register Forwarding
+    for (i=0..N) {
+        int t = A[i] * 2; // Register
+        C[i] = t + B[i];
+    }
+    ```
+
+### **S15: Recursion to Iteration (递归转迭代)**
+*   **适用场景**: 算法包含递归调用（DFS、树遍历、快速排序），HLS 不支持动态栈。
+*   **原理**: 使用显式的 `stack` 数组模拟递归过程，将递归逻辑改写为 `while` 循环状态机。
+*   **Code Pattern**:
+    ```cpp
+    // Explicit Stack
+    int stack[1024]; 
+    int top = 0;
+    stack[top++] = root_node;
+    
+    while (top > 0) {
+        int node = stack[--top];
+        process(node);
+        if (node->left) stack[top++] = node->left;
+        if (node->right) stack[top++] = node->right;
+    }
     ```
 
 ---

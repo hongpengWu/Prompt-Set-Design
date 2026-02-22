@@ -1,0 +1,236 @@
+{
+  "name": "S-Lib",
+  "full_name": "HLS Structural Optimization Strategy Catalog",
+  "edition": "High-Performance Edition",
+  "source": {
+    "format": "markdown",
+    "path": "S_Lib_Catalog.md"
+  },
+  "design_philosophy": [
+    "Pragma 只是结果，结构才是原因。",
+    "不要试图用 #pragma HLS PIPELINE 掩盖糟糕的存储结构。",
+    "真正的优化来自：Data Reuse（数据复用）、Parallelism（并行度）、Contention Avoidance（冲突避免）。"
+  ],
+  "entry_schema": {
+    "id": "策略编号（如 S3）",
+    "trigger": "触发条件与瓶颈证据（如 II>1/端口冲突/依赖分析）",
+    "transformation": "结构性改写步骤（局部、可回滚）",
+    "verification": "Gate 与验证要点（如 CSIM + 报告指标）",
+    "artifacts": "可选：代码骨架/前后对比/pragma 组合"
+  },
+  "categories": [
+    {
+      "id": "core_computation_patterns",
+      "name_cn": "核心计算模式优化",
+      "strategies": ["S1", "S5", "S6", "S7", "S13"]
+    },
+    {
+      "id": "memory_bandwidth",
+      "name_cn": "访存与带宽优化",
+      "strategies": ["S3", "S4", "S10"]
+    },
+    {
+      "id": "pipeline_interconnect",
+      "name_cn": "流水线与互连优化",
+      "strategies": ["S2", "S9", "S11", "S12"]
+    },
+    {
+      "id": "software_patterns_to_hls",
+      "name_cn": "软件工程模式映射",
+      "strategies": ["S8", "S15"]
+    }
+  ],
+  "strategies": [
+    {
+      "id": "S1",
+      "name": "Tiling + Local Buffer",
+      "name_cn": "分块与局部缓存",
+      "category_id": "core_computation_patterns",
+      "applicable_scenarios": [
+        "全局内存（DDR/HBM）带宽受限且存在数据复用（如卷积、矩阵乘、图像滤波）"
+      ],
+      "principle": "将大块数据分批搬运到片上 BRAM，在片上完成多次计算后再写回，降低 Access/Compute 比率。",
+      "code_pattern_cpp": "// Global Memory: in[N], out[N]\n// Local Buffer:  buf[TILE_SIZE]\nfor (int i = 0; i < N; i += TILE_SIZE) {\n    // 1. Load Tile\n    for (int j = 0; j < TILE_SIZE; j++) buf[j] = in[i+j];\n\n    // 2. Compute on Tile (High Reuse)\n    process_tile(buf);\n\n    // 3. Store Tile\n    for (int j = 0; j < TILE_SIZE; j++) out[i+j] = buf[j];\n}\n",
+      "key_pragmas": [
+        "#pragma HLS ARRAY_PARTITION variable=buf cyclic/block factor=... (匹配计算并行度)"
+      ]
+    },
+    {
+      "id": "S2",
+      "name": "Dataflow Canonical Form",
+      "name_cn": "数据流标准型",
+      "category_id": "pipeline_interconnect",
+      "applicable_scenarios": [
+        "端到端处理流程包含多个异构阶段（如 Load -> FFT -> Filter -> Store）"
+      ],
+      "principle": "利用 FIFO 或 Ping-Pong Buffer 解耦模块，构建任务级流水（Task-Level Pipeline）。",
+      "code_pattern_cpp": "void top_function(...) {\n    #pragma HLS DATAFLOW\n    hls::stream<data_t> s1, s2;\n\n    load_module(in, s1);      // Producer\n    compute_module(s1, s2);   // Consumer & Producer\n    store_module(s2, out);    // Consumer\n}\n",
+      "risks": ["避免非标准数据流（如 bypass/feedback loop）破坏握手逻辑。"]
+    },
+    {
+      "id": "S3",
+      "name": "Banking & Partitioning",
+      "name_cn": "存储体划分",
+      "category_id": "memory_bandwidth",
+      "applicable_scenarios": ["循环展开（Unroll）导致端口冲突（II > 1）"],
+      "principle": "通过数组分割增加 BRAM 端口数，以匹配计算吞吐并降低端口冲突。",
+      "code_pattern_cpp": "int buffer[1024];\n#pragma HLS ARRAY_PARTITION variable=buffer cyclic factor=4\n// Now we can access buffer[i], buffer[i+1], buffer[i+2], buffer[i+3] simultaneously\nfor (int i = 0; i < 1024; i += 4) {\n    #pragma HLS PIPELINE II=1\n    // Vectorized compute\n    process(buffer[i], buffer[i+1], buffer[i+2], buffer[i+3]);\n}\n",
+      "entry_example": {
+        "trigger": [
+          "Loop unroll 后同周期多次访问同一 BRAM，出现端口冲突，导致 II > 1"
+        ],
+        "transformation": [
+          "选择 partition factor 与 unroll factor 对齐（如 4）",
+          "对热点数组做 cyclic partition / banking",
+          "将多次访问改写为并行访问（与 unroll 展开一致）"
+        ],
+        "verification": [
+          "CSIM 必须通过（语义不变）",
+          "HLS 报告中 II 降至目标值且无新增 memory dependence 警告"
+        ],
+        "before_after_cpp": {
+          "before": "int buf[1024];\nfor (int i = 0; i < 1024; i++) {\n  #pragma HLS PIPELINE\n  acc += buf[i] + buf[i+1] + buf[i+2] + buf[i+3];\n}\n",
+          "after": "int buf[1024];\n#pragma HLS ARRAY_PARTITION variable=buf cyclic factor=4\nfor (int i = 0; i < 1024; i += 4) {\n  #pragma HLS PIPELINE II=1\n  acc += buf[i+0] + buf[i+1] + buf[i+2] + buf[i+3];\n}\n"
+        }
+      }
+    },
+    {
+      "id": "S4",
+      "name": "Wide Load/Store",
+      "name_cn": "宽端口矢量化",
+      "category_id": "memory_bandwidth",
+      "applicable_scenarios": [
+        "算法吞吐受限于 DDR 带宽（Memory Bound）且访问连续"
+      ],
+      "principle": "将窄类型指针重塑为宽向量（如 ap_uint<512>），提高单周期有效带宽。",
+      "code_pattern_cpp": "typedef ap_uint<512> vec_t;\nvoid kernel(vec_t* in, vec_t* out, int size) {\n    #pragma HLS INTERFACE m_axi port=in bundle=gmem0 max_widen_bitwidth=512\n    for (int i = 0; i < size / 16; i++) { // 512 bits = 16 * 32-bit ints\n        vec_t chunk = in[i];\n        // Manually unpack or cast\n        for (int k = 0; k < 16; k++) {\n            int val = chunk.range(k*32+31, k*32);\n            // compute...\n        }\n    }\n}\n"
+    },
+    {
+      "id": "S5",
+      "name": "Systolic Array",
+      "name_cn": "脉动阵列",
+      "category_id": "core_computation_patterns",
+      "applicable_scenarios": ["矩阵乘法（GEMM）、2D 卷积、规则 MAC 密集型运算"],
+      "principle": "构建 2D PE 阵列，使数据在 PE 间局部流动（shift），减少全局广播并提升频率与计算密度。",
+      "code_pattern_cpp": "// 2D Array of PEs\n// A_local, B_local flowing through registers\nfor (int k = 0; k < K; k++) {\n    for (int i = 0; i < SIZE; i++) {\n        for (int j = 0; j < SIZE; j++) {\n            #pragma HLS PIPELINE II=1\n            // Shift data: A flows East, B flows South\n            val_A = (j == 0) ? in_A[i][k] : fifo_A[i][j-1].read();\n            val_B = (i == 0) ? in_B[k][j] : fifo_B[i-1][j].read();\n\n            // MAC\n            C[i][j] += val_A * val_B;\n\n            // Forward\n            if (j < SIZE-1) fifo_A[i][j].write(val_A);\n            if (i < SIZE-1) fifo_B[i][j].write(val_B);\n        }\n    }\n}\n",
+      "tips": ["使用 hls::stream 或 ap_shift_reg 实现 PE 间连接，避免长线路由。"]
+    },
+    {
+      "id": "S6",
+      "name": "Wavefront / Hyperplane Scheduling",
+      "name_cn": "波前/超平面调度",
+      "category_id": "core_computation_patterns",
+      "applicable_scenarios": [
+        "动态规划（DP）、Smith-Waterman、Seidel/Gauss-Seidel 迭代、存在数据依赖的网格计算"
+      ],
+      "principle": "沿反对角线（i+j=const）遍历以消除同一对角线内的数据依赖，从而实现流水与并行。",
+      "code_pattern_cpp": "// Original: for i, for j ... dep on [i-1][j], [i][j-1]\n// Skewed:\nfor (int sum = 0; sum < N + M; sum++) { // Wavefront index\n    for (int i = 0; i < N; i++) {\n        #pragma HLS PIPELINE II=1\n        int j = sum - i; // Derive j\n        if (j >= 0 && j < M) {\n            // Now [i, j] and [i+1, j-1] are parallel safe\n            update(buffer[i], buffer[i-1]);\n        }\n    }\n}\n"
+    },
+    {
+      "id": "S7",
+      "name": "Custom Bitwidth & Fixed Point",
+      "name_cn": "自定义位宽与定点化",
+      "category_id": "core_computation_patterns",
+      "applicable_scenarios": [
+        "资源（BRAM/LUT/DSP）受限，或算法对精度不敏感（如神经网络推理）"
+      ],
+      "principle": "放弃标准 float 或 int，使用 Xilinx 任意精度数据类型 (ap_fixed, ap_int) 以减少资源消耗。",
+      "code_pattern_cpp": "#include \"ap_fixed.h\"\ntypedef ap_fixed<16, 6> data_t;\nvoid kernel(data_t* in, data_t* out) {\n    data_t val = in[0] * in[1];\n}\n"
+    },
+    {
+      "id": "S13",
+      "name": "LUT / ROM Approximation",
+      "name_cn": "查表近似",
+      "category_id": "core_computation_patterns",
+      "applicable_scenarios": [
+        "复杂的超越函数（exp, log, sin/cos）位于内层循环，导致 DSP 消耗过高"
+      ],
+      "principle": "预先计算函数值存入 static const 数组（ROM），将复杂数学运算转换为一次内存读取。",
+      "code_pattern_cpp": "static const ap_fixed<16,10> LUT[1024] = { ... };\nap_fixed<16,10> fast_sigmoid(ap_fixed<16,10> x) {\n    int idx = map_to_index(x);\n    return LUT[idx];\n}\n"
+    },
+    {
+      "id": "S8",
+      "name": "AoS to SoA",
+      "name_cn": "数据布局：结构体数组转结构数组",
+      "category_id": "software_patterns_to_hls",
+      "applicable_scenarios": [
+        "Data Oriented Design（DOD）下的多字段 struct 数组需要并行/分 bank 访问"
+      ],
+      "principle": "将 struct 的字段拆分为独立数组（SoA），便于分别 bank 化并提升并行访问能力。",
+      "transformation": "struct {r,g,b} pixels[N]  ->  r[N], g[N], b[N]",
+      "purpose": "提升可并行访存与 bank 映射灵活性。"
+    },
+    {
+      "id": "S10",
+      "name": "Temporal Blocking",
+      "name_cn": "时间复用分块",
+      "category_id": "memory_bandwidth",
+      "applicable_scenarios": ["迭代型 Stencil（多步时间迭代 t,t+1,t+2...）"],
+      "principle": "将多次时间步计算包进同一片上工作集，同时分块空间与时间以提升算术强度（Flops/Byte）。",
+      "notes": [
+        "构建金字塔或菱形形状的片上 Buffer",
+        "在片上连续执行 t -> t+1 -> t+2 的更新后再访问 DDR"
+      ]
+    },
+    {
+      "id": "S11",
+      "name": "Line Buffer & Sliding Window",
+      "name_cn": "行缓存与滑窗",
+      "category_id": "pipeline_interconnect",
+      "applicable_scenarios": ["图像处理卷积、Sobel 等 3x3/5x5 窗口"],
+      "principle": "用行缓存保存前几行数据并维护滑窗，避免重复从 DDR 读取像素，提高数据复用。",
+      "code_pattern_cpp": "hls::LineBuffer<2, WIDTH, pixel_t> line_buf;\nhls::Window<3, 3, pixel_t> window;\n\nfor (int y = 0; y < H; y++) {\n    for (int x = 0; x < W; x++) {\n        #pragma HLS PIPELINE II=1\n        pixel_t in_pix = in_stream.read();\n\n        // Shift Line Buffer & Window\n        line_buf.shift_pixels_up(x);\n        line_buf.insert_bottom_row(in_pix, x);\n        window.shift_pixels_left();\n        window.insert(in_pix, 0, 0); // Update window from line buffer\n\n        // Compute on Window\n        if (valid_region) out_stream.write(apply_filter(window));\n    }\n}\n"
+    },
+    {
+      "id": "S12",
+      "name": "Control-Flow Regularization",
+      "name_cn": "控制流规整化",
+      "category_id": "pipeline_interconnect",
+      "applicable_scenarios": ["稀疏数据处理、条件分支多的逻辑"],
+      "principle": "将 if-else 控制分歧转换为数据选择（mux/predication）或掩码计算，避免流水线频繁清空。",
+      "code_pattern_cpp": "// Bad (Control divergence)\nif (cond) res = a * b; else res = c + d;\n\n// Good (Predication)\nint val_true = a * b;\nint val_false = c + d;\nres = cond ? val_true : val_false; // HLS infers a Mux\n"
+    },
+    {
+      "id": "S9",
+      "name": "Loop Fusion",
+      "name_cn": "循环融合",
+      "category_id": "pipeline_interconnect",
+      "applicable_scenarios": [
+        "多个循环顺序处理相同大小的数据，中间产生大量临时 BRAM 占用"
+      ],
+      "principle": "合并 Producer/Consumer 循环，使数据在寄存器中直接传递。",
+      "code_pattern_cpp": "// Before: 2 loops, temp buffer\nfor (i=0..N) temp[i] = A[i] * 2;\nfor (i=0..N) C[i] = temp[i] + B[i];\n// After: 1 loop\nfor (i=0..N) {\n    int t = A[i] * 2;\n    C[i] = t + B[i];\n}\n"
+    },
+    {
+      "id": "S15",
+      "name": "Recursion to Iteration",
+      "name_cn": "递归转迭代",
+      "category_id": "software_patterns_to_hls",
+      "applicable_scenarios": ["DFS, Tree Traversal, QuickSort 等递归算法"],
+      "principle": "使用显式 stack 数组模拟递归，将逻辑改写为 while 循环状态机。",
+      "code_pattern_cpp": "int stack[1024]; int top = 0;\nstack[top++] = root;\nwhile (top > 0) {\n    int node = stack[--top];\n    process(node);\n    if (node->left) stack[top++] = node->left;\n}\n"
+    }
+  ],
+  "mappings": [
+    {
+      "sw_pattern": "Working Set Reduction",
+      "hls_mapping": "Tiling (S1)",
+      "purpose": "确保工作集装入片上 BRAM，避免频繁 DDR 访问。"
+    },
+    {
+      "sw_pattern": "Producer-Consumer",
+      "hls_mapping": "Stream Fusion (S11)",
+      "purpose": "消除中间临时数组，节省 BRAM 并降低延迟。"
+    },
+    {
+      "sw_pattern": "Lookup Table (LUT)",
+      "hls_mapping": "ROM Inference",
+      "purpose": "用 ROM 近似复杂函数，减少 DSP 消耗。"
+    },
+    {
+      "sw_pattern": "Double Buffering",
+      "hls_mapping": "Ping-Pong Buffer",
+      "purpose": "掩盖数据搬运时间，提升端到端吞吐。"
+    }
+  ]
+}
