@@ -1,0 +1,3 @@
+EstimatedClockPeriod = 8.821 ns
+TotalExecution(cycles) = 2316864 cycles
+T_exec = EstimatedClockPeriod × TotalExecution(cycles) = 20437057.344 ns

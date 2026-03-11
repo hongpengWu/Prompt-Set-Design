@@ -1,0 +1,21 @@
+#ifndef HS_CONFIG_PARAMS_H
+#define HS_CONFIG_PARAMS_H
+
+#define MAX_WIDTH 256
+#define MAX_HEIGHT 128
+#define MAX_PIXELS (MAX_WIDTH * MAX_HEIGHT)
+
+#define HS_N_ITER 100
+
+#define HS_ALPHA_INT 1
+
+#define HS_SOBEL_SHIFT 3
+
+#define HS_FLOW_FRAC_BITS 6
+#define HS_FLOW_SCALE (1 << HS_FLOW_FRAC_BITS)
+
+#define N_ITER HS_N_ITER
+#define ALPHA_VAL HS_ALPHA_INT
+#define FLOW_FRAC_BITS HS_FLOW_FRAC_BITS
+
+#endif

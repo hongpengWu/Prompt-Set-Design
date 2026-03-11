@@ -1,0 +1,22 @@
+
+
+================================================================
+== Synthesis Summary Report of 'hls_SR_UKF'
+================================================================
++ General Information: 
+    * Date:           Tue Feb  3 01:45:44 2026
+    * Version:        2024.2 (Build 5238294 on Nov  8 2024)
+    * Project:        ukf2hls_prj
+    * Solution:       sol1 (Vivado IP Flow Target)
+    * Product family: zynq
+    * Target device:  xc7z020-clg484-1
+    
+
++ Performance & Resource Estimates: 
+    
+    PS: '+' for module; 'o' for loop; '*' for dataflow
+    +-----------------------------------------------------------------------+--------+-------+---------+-----------+----------+---------+------+----------+------+-----------+-------------+-------------+-----+
+    |                                Modules                                |  Issue |       | Latency |  Latency  | Iteration|         | Trip |          |      |           |             |             |     |
+    |                                & Loops                                |  Type  | Slack | (cycles)|    (ns)   |  Latency | Interval| Count| Pipelined| BRAM |    DSP    |      FF     |     LUT     | URAM|
+    +-----------------------------------------------------------------------+--------+-------+---------+-----------+----------+---------+------+----------+------+-----------+-------------+-------------+-----+
+    |+ hls_SR_UKF                                                           |  Timing|  -0.82|    14357|  1.436e+05|         -|    14358|     -|        no|     -|  157 (71%)|  27737 (26%)|  31965 (60%)|    -|
