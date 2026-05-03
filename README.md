@@ -1,125 +1,128 @@
 # Prompt-Set Methodology: A Phased Approach for LLM-Assisted HLS Design
 
+[**English**](./README.md) | [**中文**](./README_CN.md)
+
 > **"Turning Chaos into Silicon"**  
-> 一套将大模型（LLM）驯化为专业硬件工程师的分阶段设计范式。
+> A multi-stage, human-on-the-loop design methodology that disciplines Large Language Models (LLMs) into professional High-Level Synthesis (HLS) hardware engineers.
 
 ![Overview](Overview.drawio.png)
 
----
-
-## 1. 为什么你需要这套方法论？
-
-如果你尝试过直接问 ChatGPT：“帮我写一个 FPGA 上的卡尔曼滤波加速器”，你可能会遇到以下崩溃场景：
-*   ❌ **幻觉代码**：生成的 C++ 用了 `malloc` 或 `std::vector`，HLS 编译器直接报错。
-*   ❌ **性能黑洞**：代码能跑，但延迟极高，完全没有利用 FPGA 的并行优势。
-*   ❌ **集成噩梦**：导出的 IP 核接口不对，根本无法连入 Vivado Block Design，板级验证直接死机。
-
-**Prompt-Set Methodology** 就是为了解决这些问题而生的。它不再把 LLM 当作一个“一键生成器”，而是把它拆解为三个**分工明确、互相制约**的虚拟专家。
+This repository contains the official implementation, prompts, and benchmark datasets for the paper: **Prompt-Set Methodology: Bridging Semantic, Optimization, and Deployment Gaps in LLM-Assisted HLS**.
 
 ---
 
-## 2. 三阶段工作流 (The 3-Stage Workflow)
+## 1. Motivation: Why Prompt-Set?
 
-请按照顺序执行以下三个阶段。不要跳步，每一步的输出都是下一步的基石。
+Directly prompting an LLM (e.g., ChatGPT) with *"Write a Kalman Filter accelerator for FPGA"* often leads to the following engineering failures:
+*   ❌ **Hallucinated Logic**: The generated C++ code uses dynamic memory (`malloc`) or `std::vector`, immediately causing HLS compiler synthesis errors.
+*   ❌ **Performance Bottlenecks**: The code simulates correctly but exhibits extremely high latency, failing to exploit FPGA spatial parallelism.
+*   ❌ **Integration Nightmares**: The exported IP core has incompatible AXI interfaces, causing Vivado Block Design to fail or the board to crash during deployment.
 
-### 🟢 Stage 1: The Translator (功能翻译官)
-> **目标**：把你的算法（Python/Matlab/公式）翻译成**绝对正确**且**符合 HLS 语法**的 C++ 代码。
-
-*   **你的动作**：使用 [Stage1_Translator.md](./Stage1_Translator.md) 模板。
-*   **LLM 的任务**：
-    1.  清洗代码，去除所有系统调用（printf, file I/O）。
-    2.  固定顶层函数接口（Signature）。
-    3.  生成 Testbench 进行自我验证。
-*   **交付物**：`func_correct.cpp` —— 这是一个跑得慢但算得对的“黄金模型”。
-
-### 🟡 Stage 2: The Architect (结构架构师)
-> **目标**：针对性能瓶颈，对代码进行**结构重构**（不是简单的加 Pragma！）。
-
-*   **你的动作**：
-    1.  运行 HLS 综合，拿到报告（Report）。
-    2.  使用 [Stage2_Architect.md](./Stage2_Architect.md) 模板。
-    3.  **关键一步**：强迫 LLM 从 [S-Lib 策略库](./S_Lib_Catalog.md) 中选择优化策略（如 S1 Tiling, S5 Systolic Array）。
-*   **LLM 的任务**：
-    1.  分析报告，指出是算得慢（Compute Bound）还是读得慢（Memory Bound）。
-    2.  提出 Plan A / Plan B 两个改造方案。
-    3.  实施代码重构（如引入 Line Buffer，改变循环顺序）。
-*   **交付物**：`hls_optimized.cpp` —— 这是一个高性能的硬件内核。
-
-### 🔵 Stage 3: The Integrator (系统集成者)
-> **目标**：把 IP 核部署到板卡（如 PYNQ-Z2）上，并跑通 Python 驱动。
-
-*   **你的动作**：使用 [Stage3_Integrator.md](./Stage3_Integrator.md) 模板。
-*   **LLM 的任务**：
-    1.  修改 `run_hls.tcl` 导出 IP。
-    2.  编写 `vivado_bd.tcl` 自动连线（处理 AXI 接口、时钟、中断）。
-    3.  编写 `driver.py`，在板子上加载 Bitstream 并验证结果。
-*   **交付物**：`overlay.bit` + `driver.py` —— 这是一个完整的硬件加速系统。
+The **Prompt-Set Methodology** is designed to solve these exact issues. Instead of treating the LLM as a "one-click generator," it decomposes the workflow into three distinct, mutually constrained virtual experts (Agents).
 
 ---
 
-## 3. 新手入门指南 (Step-by-Step Guide)
+## 2. The 3-Stage Workflow
 
-假设你要实现一个 **矩阵乘法 (GEMM)** 加速器，请按以下步骤操作：
+The methodology adheres to the principle of *"Correctness First, Performance Second, Integration Last"*. Please execute the stages sequentially. 
 
-### Step 1: 准备原材料
-准备好你的 Python 原型代码：
+### 🟢 Stage 1: The Translator (Semantics & Interfaces)
+> **Goal**: Translate algorithmic specifications (Python/Matlab/Math) into **synthesizable** and **semantically equivalent** HLS C++ code.
+
+*   **Action**: Use the [Stage1_Translator.md](./Stage1_Translator.md) template.
+*   **LLM's Task**:
+    1.  Cleanse code (remove OS calls like `printf`, file I/O).
+    2.  Enforce strict top-level function signatures (e.g., `void func(float A[N], ...)`).
+    3.  Generate a Testbench for C-Simulation (CSIM) self-verification.
+*   **Deliverable**: `func_correct.cpp` — A "Golden Model" that is functionally correct but unoptimized.
+
+### 🟡 Stage 2: The Architect (Micro-Architectural Optimization)
+> **Goal**: Perform **deep structural refactoring** guided by hardware bottlenecks, moving beyond simple Pragma injection.
+
+*   **Action**:
+    1.  Run HLS synthesis to obtain the initial timing/resource report.
+    2.  Use the [Stage2_Architect.md](./Stage2_Architect.md) template.
+    3.  **Crucial Step**: Force the LLM to select an optimization strategy from the **[S-Lib (Structural Optimization Library)](./S_Lib_Catalog.md)** (e.g., S1 Tiling, S5 Systolic Array).
+*   **LLM's Task**:
+    1.  Analyze the synthesis report (Compute Bound vs. Memory Bound).
+    2.  Propose structured refactoring plans (Plan A / Plan B).
+    3.  Rewrite loops, introduce Line Buffers, or implement dataflow pipelines.
+*   **Deliverable**: `hls_optimized.cpp` — A high-performance, hardware-aware kernel.
+
+### 🔵 Stage 3: The Integrator (System-Level Deployment)
+> **Goal**: Deploy the optimized IP core onto the target board (e.g., PYNQ-Z2) and execute the closed-loop driver.
+
+*   **Action**: Use the [Stage3_Integrator.md](./Stage3_Integrator.md) template.
+*   **LLM's Task**:
+    1.  Modify `run_hls.tcl` to export the RTL IP.
+    2.  Generate `vivado_bd.tcl` for automated AXI interconnects, clocks, and interrupts.
+    3.  Write a Python driver (`driver.py`) to load the Bitstream and verify on-board.
+*   **Deliverable**: `overlay.bit` + `driver.py` — A fully deployable hardware acceleration system.
+
+---
+
+## 3. Quick Start: Step-by-Step Guide
+
+Assume you are building a **Matrix Multiplication (GEMM)** accelerator:
+
+### Step 1: Prepare the Specification
+Prepare your algorithmic prototype (e.g., Python):
 ```python
 def gemm(A, B):
     return A @ B
 ```
 
-### Step 2: 启动 Stage 1
-*   打开 `Stage1_Translator.md`。
-*   将 `{INPUT_DESCRIPTION}` 替换为你的 Python 代码。
-*   将 `{TOP_FUNCTION_SIGNATURE}` 设定为 `void gemm_accel(float A[N][N], float B[N][N], float C[N][N])`。
-*   **发送给 LLM**。
-*   **验证**：在本地运行生成的 `gemm_tb.cpp`，确保 `PASS`。
+### Step 2: Launch Stage 1 (Translator)
+*   Open `Stage1_Translator.md`.
+*   Replace `{INPUT_DESCRIPTION}` with your Python code.
+*   Set `{TOP_FUNCTION_SIGNATURE}` to `void gemm_accel(float A[N][N], float B[N][N], float C[N][N])`.
+*   **Prompt the LLM**.
+*   **Gate**: Run CSIM with the generated `gemm_tb.cpp`. It must `PASS`.
 
-### Step 3: 启动 Stage 2
-*   运行 Vitis HLS，发现 Latency 很大，报告显示瓶颈在内存读取。
-*   打开 `Stage2_Architect.md`。
-*   在 `{BOTTLENECK_DESCRIPTION}` 中填入：“内存带宽不足，计算单元处于饥饿状态”。
-*   参考 `S_Lib_Catalog.md`，提示 LLM 考虑 **S1 (Tiling)** 和 **S5 (Systolic Array)**。
-*   **发送给 LLM**。
-*   **验证**：再次综合，确认 Latency 降低，且 C Simulation 依然通过。
+### Step 3: Launch Stage 2 (Architect)
+*   Run Vitis HLS synthesis. You may find high latency due to memory bottlenecks.
+*   Open `Stage2_Architect.md`.
+*   In `{BOTTLENECK_DESCRIPTION}`, describe the issue (e.g., "Memory bandwidth insufficient, PE starvation").
+*   Consult `S_Lib_Catalog.md` and prompt the LLM to apply **S1 (Tiling)** or **S5 (Systolic Array)**.
+*   **Prompt the LLM**.
+*   **Gate**: Re-run CSIM (must still pass) and check the synthesis report for latency reduction.
 
-### Step 4: 启动 Stage 3
-*   打开 `Stage3_Integrator.md`。
-*   填入你的板卡型号（如 PYNQ-Z2）。
-*   **发送给 LLM**。
-*   **执行**：运行生成的 Tcl 脚本生成 Bitstream，拷贝到板子上运行 Python 驱动。
+### Step 4: Launch Stage 3 (Integrator)
+*   Open `Stage3_Integrator.md`.
+*   Specify your target board (e.g., `PYNQ-Z2`).
+*   **Prompt the LLM**.
+*   **Gate**: Execute the generated Tcl scripts to create the Vivado block design and generate the Bitstream. Test it on the board using the Python driver.
 
 ---
 
-## 4. 仓库内容 (Repository Contents)
+## 4. Repository Structure
 
-本仓库包含方法论文档、Prompt 模板以及完整的实验案例：
+This repository includes the methodology documentation, Prompt templates, and comprehensive benchmark experiments evaluated in the paper:
 
-*   **📂 [LK (Lucas-Kanade)](./LK)**: 光流算法硬件加速案例。
-    *   展示了从 Python 原型到 FPGA 部署的全流程。
-    *   包含多次迭代优化的完整记录（Stage 2 Optimization Logs）。
-*   **📂 [UKF (Unscented Kalman Filter)](./UKF)**: 无迹卡尔曼滤波案例。
-    *   针对复杂控制算法的硬件实现。
-    *   包含 6 次结构性优化的详细过程。
-*   **📂 [LLM-Sel (LLM Selection)](./LLM-Sel)**: 模型性能基准测试。
-    *   对比了 GPT-5.2 与 Gemini 3 在 HLS 代码生成任务上的表现。
-    *   包含多个版本的生成代码对比 (v1-v20)。
-*   **📚 [S_Lib_Catalog.md](./S_Lib_Catalog.md)**: 核心资产——硬件优化策略库。
+*   **📂 [LK (Lucas-Kanade)](./LK)**: Hardware acceleration for Optical Flow.
+    *   Demonstrates the end-to-end flow from Python prototype to FPGA deployment.
+    *   Includes complete iteration logs for Stage 2 structural optimization.
+*   **📂 [UKF (Unscented Kalman Filter)](./UKF)**: Square-Root UKF implementation.
+    *   Targeting complex control algorithms.
+    *   Includes 6 detailed iterations of micro-architectural refactoring.
+*   **📂 [LLM-Sel (LLM Selection)](./LLM-Sel)**: LLM baseline comparisons.
+    *   Benchmarks GPT-5.2 vs. Gemini 3.0 Pro on HLS generation stability.
+*   **📚 [S_Lib_Catalog.md](./S_Lib_Catalog.md)**: **The core asset** — The Structural Optimization Library (JSON/Markdown format).
 *   **📝 Templates**: `Stage1_Translator.md`, `Stage2_Architect.md`, `Stage3_Integrator.md`.
 
 ---
 
-## 5. 常见问题 (FAQ)
+## 5. FAQ
 
-**Q: 为什么 LLM 总是喜欢用 `malloc`？**
-A: 因为它默认是在写软件。Stage 1 的模板中包含了 **硬约束 (Hard Constraints)**，明确禁止了动态内存分配。请务必保留这部分约束。
+**Q: Why does the LLM keep generating `malloc` in Stage 1?**
+A: Because LLMs are biased towards software engineering. The Stage 1 Prompt Card contains **Hard Constraints** explicitly forbidding dynamic memory allocation. Ensure you enforce these constraints in your prompt.
 
-**Q: Stage 2 优化后结果不对了怎么办？**
-A: 这很常见。Stage 2 强调 **Invariant Constraints (不变约束)**，即必须通过原有的 Testbench。如果失败，请将错误日志反馈给 LLM，并要求它回滚到上一个版本重新尝试 Plan B。
+**Q: What if the code fails C-Simulation after Stage 2 optimization?**
+A: This is common when LLMs hallucinate complex hardware logic. Stage 2 relies on **Invariant Constraints** (must pass the original testbench). If it fails, feed the `csim.log` back to the LLM and command it to rollback and try Plan B.
 
-**Q: 我可以直接从 Stage 1 跳到 Stage 3 吗？**
-A: 可以，但这通常意味着你部署了一个性能很差的加速器（可能比 CPU 还慢）。Stage 2 是产生“硬件价值”的核心环节。
+**Q: Can I skip Stage 2 and go directly from Stage 1 to Stage 3?**
+A: Yes, but you will deploy an unoptimized accelerator that might be slower than an ARM CPU. Stage 2 (Architect + S-Lib) is where the true "hardware performance" is generated.
 
 ---
 
-*Designed for Engineers, by Engineers.*
+*Designed for Hardware Engineers, by Hardware Engineers.*
